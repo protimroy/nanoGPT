@@ -61,6 +61,7 @@ alopex_lr = 1e-2
 alopex_head_lr = 1e-2
 alopex_consequence_mode = "sequence"  # sequence, token, suffix
 alopex_label_smoothing = 0.0
+alopex_hidden_enabled = True
 
 # -----------------------------------------------------------------------------
 config_keys = [
@@ -172,6 +173,7 @@ alopex_cfg = AlopexSLMConfig(
     consequence_mode=alopex_consequence_mode,
     head_mode="analytic",
     label_smoothing=alopex_label_smoothing,
+    hidden_enabled=alopex_hidden_enabled,
 )
 alopex = AlopexV43FS2TLM(model, alopex_cfg, forward_dtype=forward_dtype)
 if checkpoint is not None and "alopex" in checkpoint:
@@ -185,8 +187,10 @@ print(
     f"rho={alopex_rho}",
     f"nu={alopex_nu}",
     f"consequence={alopex_consequence_mode}",
+    f"hidden_enabled={alopex_hidden_enabled}",
 )
-print(f"sensor forwards/update: {2 * alopex_k}; total forwards/update including base cache: {1 + 2 * alopex_k}")
+sensor_forwards = 2 * alopex_k if alopex_hidden_enabled else 0
+print(f"sensor forwards/update: {sensor_forwards}; total forwards/update including base cache: {1 + sensor_forwards}")
 print(f"unique data tokens/update: {batch_size * block_size:,}")
 
 
