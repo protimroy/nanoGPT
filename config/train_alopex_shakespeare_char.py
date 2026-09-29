@@ -1,0 +1,20 @@
+# Fast mechanism smoke test. Prepare with: python data/shakespeare_char/prepare.py
+out_dir = 'out-alopex-shakespeare-char'
+dataset = 'shakespeare_char'
+eval_interval = 50
+eval_iters = 20
+log_interval = 1
+batch_size = 8
+block_size = 64
+n_layer = 2
+n_head = 4
+n_embd = 128
+dropout = 0.0
+bias = False
+max_iters = 500
+dtype = 'float32'
+alopex_k = 4
+alopex_rank = 32
+alopex_lr = 1e-2
+alopex_head_lr = 1e-2
+alopex_consequence_mode = 'token'

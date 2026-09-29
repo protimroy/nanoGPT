@@ -1,0 +1,26 @@
+# Matched architecture/data control for config/train_alopex_50m.py.
+out_dir = 'out-adamw-50m'
+dataset = 'openwebtext'
+eval_interval = 50
+eval_iters = 10
+log_interval = 1
+gradient_accumulation_steps = 1
+batch_size = 4
+block_size = 128
+n_layer = 8
+n_head = 8
+n_embd = 512
+dropout = 0.0
+bias = False
+learning_rate = 6e-4
+max_iters = 1000
+weight_decay = 1e-1
+beta1 = 0.9
+beta2 = 0.95
+grad_clip = 1.0
+decay_lr = True
+warmup_iters = 100
+lr_decay_iters = 1000
+min_lr = 6e-5
+dtype = 'bfloat16'
+compile = True
