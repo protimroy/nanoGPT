@@ -59,6 +59,7 @@ class AlopexSLMConfig:
     label_smoothing: float = 0.0
 
     # Module selection. The head is handled separately.
+    hidden_enabled: bool = True
     include_linear_prefix: str = "transformer.h."
 
 
@@ -189,8 +190,8 @@ class AlopexV43FS2TLM:
         *,
         forward_dtype: Optional[torch.dtype] = None,
     ):
-        if cfg.K < 1:
-            raise ValueError("K must be >= 1")
+        if cfg.hidden_enabled and cfg.K < 1:
+            raise ValueError("K must be >= 1 when hidden_enabled=True")
         if cfg.consequence_mode not in {"sequence", "token", "suffix"}:
             raise ValueError(f"unknown consequence_mode={cfg.consequence_mode!r}")
         if cfg.head_mode != "analytic":
@@ -346,75 +347,78 @@ class AlopexV43FS2TLM:
             missing = sorted(set(self.modules) - set(self.cache))
             raise RuntimeError(f"some target Linear modules did not execute: {missing[:4]}")
 
-        sigmas = {
-            name: max(
-                self.cfg.sigma_min,
-                self.cfg.sigma_rel * float(preact.float().square().mean().sqrt()),
-            )
-            for name, (_, preact) in self.cache.items()
-        }
-        credit = {
-            name: torch.zeros_like(preact, dtype=torch.float32)
-            for name, (_, preact) in self.cache.items()
-        }
-
-        plus_loss_sum = 0.0
-        minus_loss_sum = 0.0
-        for _ in range(self.cfg.K):
-            xis = {name: _rademacher_like(preact) for name, (_, preact) in self.cache.items()}
-            self.probe_delta = {name: sigmas[name] * xi for name, xi in xis.items()}
-
-            self.mode = "plus"
-            with self._forward_context():
-                logits_p, _ = self.model(idx, return_all_logits=True)
-            loss_p = self._per_token_loss(logits_p, targets, self.cfg.label_smoothing)
-
-            self.mode = "minus"
-            with self._forward_context():
-                logits_m, _ = self.model(idx, return_all_logits=True)
-            loss_m = self._per_token_loss(logits_m, targets, self.cfg.label_smoothing)
-            self.mode = None
-
-            diff = self._localize_consequence(loss_m - loss_p, targets)
-            plus_loss_sum += float(loss_p.mean())
-            minus_loss_sum += float(loss_m.mean())
-
-            for name, xi in xis.items():
-                coeff = diff / (2.0 * sigmas[name])
-                credit[name].add_(coeff.unsqueeze(-1) * xi.float())
-
-            del logits_p, logits_m, loss_p, loss_m, xis
-
+        sigmas = {}
         update_rms = []
         credit_rms = []
-        for name, module in self.modules.items():
-            h_in, _ = self.cache[name]
-            g = (credit[name] / self.cfg.K).reshape(-1, module.out_features)
-            h = h_in.float().reshape(-1, module.in_features)
-            subspace = self.subspaces[name]
+        plus_loss_sum = 0.0
+        minus_loss_sum = 0.0
 
-            if self.cfg.basis_refresh_every > 0 and self.step_idx % self.cfg.basis_refresh_every == 0:
-                subspace.refresh_basis(g, h, alpha=self.cfg.basis_alpha)
-
-            d_w_persistent = subspace.persistent_update(g, h, self.cfg)
-            g_fresh = normalize_transient_credit(g, self.cfg)
-            d_w_transient = g_fresh.T @ h / max(1, h.shape[0])
-            d_w = (
-                self.cfg.lambda_persistent * d_w_persistent
-                + self.cfg.lambda_transient * d_w_transient
-            )
-            applied = self.cfg.lr * d_w
-            module.weight.add_(applied.to(module.weight.dtype))
-            if module.bias is not None:
-                db = g_fresh.mean(0)
-                module.bias.add_(
-                    self.cfg.lr
-                    * self.cfg.lambda_transient
-                    * db.to(module.bias.dtype)
+        if self.cfg.hidden_enabled:
+            sigmas = {
+                name: max(
+                    self.cfg.sigma_min,
+                    self.cfg.sigma_rel * float(preact.float().square().mean().sqrt()),
                 )
+                for name, (_, preact) in self.cache.items()
+            }
+            credit = {
+                name: torch.zeros_like(preact, dtype=torch.float32)
+                for name, (_, preact) in self.cache.items()
+            }
 
-            update_rms.append(applied.square().mean().sqrt())
-            credit_rms.append(g.square().mean().sqrt())
+            for _ in range(self.cfg.K):
+                xis = {name: _rademacher_like(preact) for name, (_, preact) in self.cache.items()}
+                self.probe_delta = {name: sigmas[name] * xi for name, xi in xis.items()}
+
+                self.mode = "plus"
+                with self._forward_context():
+                    logits_p, _ = self.model(idx, return_all_logits=True)
+                loss_p = self._per_token_loss(logits_p, targets, self.cfg.label_smoothing)
+
+                self.mode = "minus"
+                with self._forward_context():
+                    logits_m, _ = self.model(idx, return_all_logits=True)
+                loss_m = self._per_token_loss(logits_m, targets, self.cfg.label_smoothing)
+                self.mode = None
+
+                diff = self._localize_consequence(loss_m - loss_p, targets)
+                plus_loss_sum += float(loss_p.mean())
+                minus_loss_sum += float(loss_m.mean())
+
+                for name, xi in xis.items():
+                    coeff = diff / (2.0 * sigmas[name])
+                    credit[name].add_(coeff.unsqueeze(-1) * xi.float())
+
+                del logits_p, logits_m, loss_p, loss_m, xis
+
+            for name, module in self.modules.items():
+                h_in, _ = self.cache[name]
+                g = (credit[name] / self.cfg.K).reshape(-1, module.out_features)
+                h = h_in.float().reshape(-1, module.in_features)
+                subspace = self.subspaces[name]
+
+                if self.cfg.basis_refresh_every > 0 and self.step_idx % self.cfg.basis_refresh_every == 0:
+                    subspace.refresh_basis(g, h, alpha=self.cfg.basis_alpha)
+
+                d_w_persistent = subspace.persistent_update(g, h, self.cfg)
+                g_fresh = normalize_transient_credit(g, self.cfg)
+                d_w_transient = g_fresh.T @ h / max(1, h.shape[0])
+                d_w = (
+                    self.cfg.lambda_persistent * d_w_persistent
+                    + self.cfg.lambda_transient * d_w_transient
+                )
+                applied = self.cfg.lr * d_w
+                module.weight.add_(applied.to(module.weight.dtype))
+                if module.bias is not None:
+                    db = g_fresh.mean(0)
+                    module.bias.add_(
+                        self.cfg.lr
+                        * self.cfg.lambda_transient
+                        * db.to(module.bias.dtype)
+                    )
+
+                update_rms.append(applied.square().mean().sqrt())
+                credit_rms.append(g.square().mean().sqrt())
 
         head_diag = self._analytic_head_update(base_logits, targets, base_head_input)
         self.probe_delta.clear()
@@ -422,14 +426,14 @@ class AlopexV43FS2TLM:
 
         valid = targets.ne(-1)
         unique_tokens = int(valid.sum())
-        forward_evals = 1 + 2 * self.cfg.K
+        forward_evals = 1 + (2 * self.cfg.K if self.cfg.hidden_enabled else 0)
         return {
             "loss": float(base_loss),
-            "probe_plus_loss": plus_loss_sum / self.cfg.K,
-            "probe_minus_loss": minus_loss_sum / self.cfg.K,
-            "sigma_mean": sum(sigmas.values()) / len(sigmas),
-            "hidden_credit_rms": float(torch.stack(credit_rms).mean()),
-            "hidden_update_rms": float(torch.stack(update_rms).mean()),
+            "probe_plus_loss": plus_loss_sum / self.cfg.K if self.cfg.hidden_enabled else float("nan"),
+            "probe_minus_loss": minus_loss_sum / self.cfg.K if self.cfg.hidden_enabled else float("nan"),
+            "sigma_mean": sum(sigmas.values()) / len(sigmas) if sigmas else 0.0,
+            "hidden_credit_rms": float(torch.stack(credit_rms).mean()) if credit_rms else 0.0,
+            "hidden_update_rms": float(torch.stack(update_rms).mean()) if update_rms else 0.0,
             "head_update_rms": head_diag["head_update_rms"],
             "head_credit_rms": head_diag["head_credit_rms"],
             "K": float(self.cfg.K),
