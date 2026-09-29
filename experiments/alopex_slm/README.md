@@ -15,7 +15,7 @@ This is **not** the frozen MNIST v43 configuration. Frozen v43 used complete hid
 - basis refresh every 8 updates;
 - full stateless transient credit path in parallel with persistent low-rank credit.
 
-The large-vocabulary LM head uses the historical **v43-hybrid pattern**: exact local cross-entropy output credit (`target - softmax`) rather than trying to reconstruct a ~50k-dimensional logit signal from four probes. Consequently, the default experiment is backprop-free in the hidden stack but is not scalar-query-only end-to-end.
+The large-vocabulary LM head uses the historical **v43-hybrid pattern**: exact local cross-entropy output credit (`target - softmax`) rather than trying to reconstruct a ~50k-dimensional logit signal from four probes. Consequently, the default experiment is backprop-free in the hidden stack but is not scalar-query-only end-to-end. Because nanoGPT ties `lm_head.weight` to the token embedding table, this local readout update also changes the tied input embeddings; it does not include the separate input-embedding gradient contribution that backprop would compute.
 
 No `backward()`, VJP, or JVP is used by `train_alopex.py`.
 
@@ -54,6 +54,7 @@ python train_alopex.py config/train_alopex_7m.py
 
 # Only after the smaller BPE model shows sustained learning:
 python train_alopex.py config/train_alopex_50m.py
+python train_alopex.py config/train_head_only_50m.py
 python train.py config/train_adamw_50m.py
 ```
 
@@ -99,6 +100,7 @@ The first meaningful result is not “beats AdamW.” The gates are:
 1. **Causal-LM sanity:** sustained loss reduction on the tiny Transformer without reverse-mode training.
 2. **BPE scaling:** sustained learning on the ~7M model with `K=4`.
 3. **50M viability:** sustained learning on the ~50.9M model without increasing `K` with parameter count.
-4. **Competitiveness:** only then compare final quality, sample efficiency, objective-evaluation efficiency, memory, and wall-clock against AdamW.
+4. **Hidden-credit contribution:** FS-2T must improve over the one-forward analytic-head-only ablation; otherwise falling LM loss is not evidence that the hidden estimator works.
+5. **Competitiveness:** only then compare final quality, sample efficiency, objective-evaluation efficiency, memory, and wall-clock against AdamW.
 
 A failure at any gate is informative: it identifies where four-probe activation credit stops carrying enough information.
