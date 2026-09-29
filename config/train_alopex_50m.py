@@ -1,0 +1,20 @@
+# Target SLM mechanism test: ~50.9M nanoGPT parameters with tied embeddings.
+out_dir = 'out-alopex-50m'
+dataset = 'openwebtext'
+eval_interval = 50
+eval_iters = 10
+log_interval = 1
+batch_size = 4
+block_size = 128
+n_layer = 8
+n_head = 8
+n_embd = 512
+dropout = 0.0
+bias = False
+max_iters = 1000
+dtype = 'bfloat16'
+alopex_k = 4
+alopex_rank = 64
+alopex_lr = 1e-2
+alopex_head_lr = 1e-2
+alopex_consequence_mode = 'token'
